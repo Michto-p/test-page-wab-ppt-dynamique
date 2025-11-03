@@ -4,7 +4,7 @@
 <meta charset="utf-8">
 <meta http-equiv="X-UA-Compatible" content="IE=edge">
 <meta name="viewport" content="width=device-width, initial-scale=1">
-<title>éCO₂mix — Consommation (widget ES5)</title>
+<title>éCO₂mix — Consommation (widget ES5 v2.1)</title>
 <style>
   :root{ --bg:#0b1222; --panel:#0f172a; --ink:#e5e7eb; --muted:#9ca3af; --brand:#60a5fa; }
   *{box-sizing:border-box}
@@ -29,7 +29,7 @@
 </head>
 <body>
   <div class="card">
-    <h1>Consommation d'électricité en France V 1.1</h1>
+    <h1>Consommation d'électricité en France</h1>
     <div class="grid">
       <div>
         <p class="big"><span id="nowVal">—</span><span class="unit">MW</span></p>
@@ -51,9 +51,13 @@
 
 <script>
 (function(){
-  // Two ODRE mirrors (same Opendatasoft engine)
-  var API1 = 'https://odre.opendatasoft.com/api/records/1.0/search/?dataset=eco2mix-national-tr&rows=96&sort=-date_heure&refine.nature=Consommation&timezone=Europe%2FParis';
-  var API2 = 'https://reseaux-energies-rte.opendatasoft.com/api/records/1.0/search/?dataset=eco2mix-national-tr&rows=96&sort=-date_heure&refine.nature=Consommation&timezone=Europe%2FParis';
+  // Explore v2.1 endpoints with explicit select/where/order to avoid empty sets.
+  var BASES = [
+    'https://odre.opendatasoft.com',
+    'https://reseaux-energies-rte.opendatasoft.com'
+  ];
+  var PATH = '/api/explore/v2.1/catalog/datasets/eco2mix-national-tr/records';
+  var QUERY = '?select=date_heure%2Cconsommation&where=perimetre%3D%22France%22%20and%20consommation%20is%20not%20null&order_by=date_heure%20desc&limit=96';
   var REFRESH_MS = 60000;
   var tz = 'Europe/Paris';
   var chartColor = '#60a5fa';
@@ -78,29 +82,28 @@
           }
         }
       };
-      x.open('GET', url, true);
+      // Cache-busting to avoid CDN caching hiccups
+      var bust = (url.indexOf('?')>-1 ? '&' : '?') + '_ts=' + Date.now();
+      x.open('GET', url + bust, true);
       x.setRequestHeader('Accept','application/json');
       x.send();
     }catch(err){ fail(err); }
   }
 
-  function toDate(rec){
-    var f = rec.fields || {};
-    var p = f.date_heure || f.dateheure || f.date || rec.record_timestamp;
+  function toDate(obj){
+    // v2.1 returns { date_heure: '2025-11-03T09:30:00+00:00' }
+    var p = obj && (obj.date_heure || obj.dateheure || obj.date);
     return p ? new Date(p) : null;
   }
 
-  function toConso(rec){
-    var f = rec.fields || {};
-    var v = f.consommation != null ? f.consommation : (f.consommation_mw != null ? f.consommation_mw : f.conso);
-    return Number(v);
+  function toConso(obj){
+    return obj && obj.consommation != null ? Number(obj.consommation) : NaN;
   }
 
   function fmtDate(d){
     try{
       return d.toLocaleString('fr-FR', {timeZone: tz, hour:'2-digit', minute:'2-digit', day:'2-digit', month:'2-digit', year:'numeric'});
     }catch(e){
-      // IE fallback without timeZone
       return d.toLocaleString();
     }
   }
@@ -110,7 +113,6 @@
     var min = Infinity, max = -Infinity, i;
     for(i=0;i<values.length;i++){ if(values[i]<min) min=values[i]; if(values[i]>max) max=values[i]; }
     if (!isFinite(min) || !isFinite(max) || max===min){ $('sparkLine').setAttribute('points',''); return; }
-    // Build points
     var pts = [];
     for(i=0;i<values.length;i++){
       var x = Math.round((i/(values.length-1))*(w-2*pad)+pad);
@@ -120,8 +122,6 @@
     var line = $('sparkLine');
     line.setAttribute('points', pts.join(' '));
     line.setAttribute('stroke', chartColor);
-
-    // Y grid / ticks
     var g = $('yTicks'); while(g.firstChild) g.removeChild(g.firstChild);
     var t, steps = 4;
     for(i=0;i<=steps;i++){
@@ -134,7 +134,8 @@
   }
 
   function process(data){
-    var recs = data && data.records ? data.records : [];
+    // v2.1 payload: { total_count, results: [ {date_heure, consommation}, ... ] }
+    var recs = data && data.results ? data.results : [];
     var list = [];
     for (var i=0;i<recs.length;i++){
       var t = toDate(recs[i]);
@@ -154,7 +155,6 @@
       : 'Actualisation automatique chaque minute (flux publié ~1×/h).';
     setStatus('OK', lagMin>30);
 
-    // Build values array
     var vals = [];
     for (var j=Math.max(0, list.length-96); j<list.length; j++){ vals.push(list[j].y); }
     drawSpark(vals);
@@ -162,12 +162,27 @@
 
   function load(){
     setStatus('Mise à jour…', false);
-    // Try primary, then fallback
-    xhrJson(API1, function(d){ process(d); }, function(){
-      xhrJson(API2, function(d){ process(d); }, function(err){
-        setStatus('Erreur de chargement', true);
-        var e = document.createElement('div'); e.className='meta err'; e.innerHTML = String(err && err.message ? err.message : err);
-        document.body.appendChild(e);
+    // Try v2.1 on base[0], fallback to base[1], then fallback to v1 (records) if both fail
+    xhrJson(BASES[0] + PATH + QUERY, function(d){ process(d); }, function(){
+      xhrJson(BASES[1] + PATH + QUERY, function(d){ process(d); }, function(){
+        // v1 fallback without refine to avoid empty sets
+        var v1 = '/api/records/1.0/search/?dataset=eco2mix-national-tr&rows=120&sort=-date_heure';
+        xhrJson(BASES[0] + v1, function(d){
+          // Map v1 to v2-like objects
+          var out = { results: [] };
+          var recs = d && d.records ? d.records : [];
+          for (var i=0;i<recs.length;i++){
+            var f = recs[i].fields || {};
+            if (f.perimetre === 'France' && f.consommation != null){
+              out.results.push({ date_heure: f.date_heure || f.date || recs[i].record_timestamp, consommation: f.consommation });
+            }
+          }
+          process(out);
+        }, function(err){
+          setStatus('Erreur de chargement', true);
+          var e = document.createElement('div'); e.className='meta err'; e.innerHTML = String(err && err.message ? err.message : err);
+          document.body.appendChild(e);
+        });
       });
     });
   }
