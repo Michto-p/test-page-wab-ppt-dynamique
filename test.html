@@ -2,167 +2,178 @@
 <html lang="fr">
 <head>
 <meta charset="utf-8">
+<meta http-equiv="X-UA-Compatible" content="IE=edge">
 <meta name="viewport" content="width=device-width, initial-scale=1">
-<title>éCO₂mix • Consommation en temps (quasi) réel</title>
+<title>éCO₂mix — Consommation (widget ES5)</title>
 <style>
-  :root{
-    --bg:#0b1222; --panel:#0f172a; --ink:#e5e7eb; --muted:#9ca3af; --brand:#60a5fa; --ok:#22c55e; --warn:#eab308;
-  }
+  :root{ --bg:#0b1222; --panel:#0f172a; --ink:#e5e7eb; --muted:#9ca3af; --brand:#60a5fa; }
   *{box-sizing:border-box}
   html,body{height:100%}
-  body{margin:0;font-family:ui-sans-serif,system-ui,Segoe UI,Roboto,Arial;background:var(--bg);color:var(--ink);display:flex;align-items:center;justify-content:center}
-  .card{width:min(920px,95vw);padding:18px 18px 14px;background:var(--panel);border:1px solid #1f2b45;border-radius:16px;box-shadow:0 8px 30px rgba(0,0,0,.35)}
-  header{display:flex;align-items:center;gap:12px;flex-wrap:wrap}
-  h1{font-size:18px;margin:0;color:#dbeafe}
-  .tag{font-size:12px;color:#93c5fd;background:#1e293b;border:1px solid #334155;border-radius:999px;padding:4px 8px}
-  .grid{display:grid;grid-template-columns:1fr 240px;gap:16px;margin-top:14px}
+  body{margin:0;font-family:Segoe UI,Roboto,Arial,sans-serif;background:var(--bg);color:var(--ink);display:flex;align-items:center;justify-content:center}
+  .card{width:min(920px,95vw);padding:18px;background:var(--panel);border:1px solid #1f2b45;border-radius:16px}
+  h1{font-size:18px;margin:0 0 8px;color:#dbeafe}
+  .grid{display:grid;grid-template-columns:1fr 260px;gap:16px}
   .big{font-size:56px;line-height:1.05;margin:0}
   .unit{font-size:20px;color:#cbd5e1;margin-left:8px}
   .meta{color:var(--muted);font-size:13px;margin-top:6px}
-  canvas{width:100%;height:220px;background:linear-gradient(180deg, rgba(255,255,255,.02), transparent 30%)}
   .footer{display:flex;justify-content:space-between;align-items:center;margin-top:10px;color:#93c5fd;font-size:12px}
-  .src{opacity:.9}
   .led{display:inline-flex;align-items:center;gap:6px}
-  .dot{width:10px;height:10px;border-radius:50%;background:#16a34a;box-shadow:0 0 10px rgba(22,163,74,.9)}
+  .dot{width:10px;height:10px;border-radius:50%;background:#16a34a;box-shadow:0 0 10px rgba(22,163,74,.9);display:inline-block}
   .warn{background:#eab308;box-shadow:0 0 10px rgba(234,179,8,.9)}
-  a{color:#93c5fd;text-decoration:none}
-  a:hover{text-decoration:underline}
-  @media (max-width:720px){ .grid{grid-template-columns:1fr} .big{font-size:38px} canvas{height:160px} }
+  .src a{color:#93c5fd;text-decoration:none}
+  .src a:hover{text-decoration:underline}
+  #spark{width:100%;height:220px;background:linear-gradient(180deg, rgba(255,255,255,.02), transparent 30%)}
+  @media (max-width:720px){ .grid{grid-template-columns:1fr} .big{font-size:38px} #spark{height:160px} }
+  .err{color:#fca5a5}
 </style>
 </head>
 <body>
   <div class="card">
-    <header>
-      <h1>Consommation d'électricité en France</h1>
-      <span class="tag">éCO₂mix — RTE (quasi temps réel)</span>
-    </header>
-
+    <h1>Consommation d'électricité en France</h1>
     <div class="grid">
       <div>
         <p class="big"><span id="nowVal">—</span><span class="unit">MW</span></p>
-        <div class="meta" id="nowWhen">Dernière mesure : —</div>
+        <div class="meta" id="nowWhen">Dernière mesure : —</div>
         <div class="meta" id="lagNote"></div>
       </div>
       <div>
-        <canvas id="chart"></canvas>
+        <svg id="spark" viewBox="0 0 600 220" preserveAspectRatio="none" aria-label="courbe 24h">
+          <polyline id="sparkLine" fill="none" stroke="currentColor" stroke-width="2" points=""/>
+          <g id="yTicks" stroke="rgba(148,163,184,.2)" stroke-width="1"></g>
+        </svg>
       </div>
     </div>
-
     <div class="footer">
       <div class="led"><span class="dot" id="dot"></span><span id="status">Mise à jour…</span></div>
-      <div class="src">Source : <a href="https://odre.opendatasoft.com/explore/dataset/eco2mix-national-tr/" target="_blank" rel="noopener">ODRÉ • éCO₂mix (RTE)</a></div>
+      <div class="src">Source : <a href="https://odre.opendatasoft.com/explore/dataset/eco2mix-national-tr/api/" target="_blank" rel="noopener">ODRÉ • éCO₂mix (RTE)</a></div>
     </div>
   </div>
 
-<script src="https://cdn.jsdelivr.net/npm/chart.js"></script>
 <script>
 (function(){
-  const API = 'https://odre.opendatasoft.com/api/records/1.0/search/?dataset=eco2mix-national-tr&rows=96&sort=-date_heure&refine.nature=Consommation';
-  const REFRESH_MS = 60_000; // refresh every minute
-  const tz = 'Europe/Paris';
-  const el = s => document.querySelector(s);
-  let chart;
+  // Two ODRE mirrors (same Opendatasoft engine)
+  var API1 = 'https://odre.opendatasoft.com/api/records/1.0/search/?dataset=eco2mix-national-tr&rows=96&sort=-date_heure&refine.nature=Consommation&timezone=Europe%2FParis';
+  var API2 = 'https://reseaux-energies-rte.opendatasoft.com/api/records/1.0/search/?dataset=eco2mix-national-tr&rows=96&sort=-date_heure&refine.nature=Consommation&timezone=Europe%2FParis';
+  var REFRESH_MS = 60000;
+  var tz = 'Europe/Paris';
+  var chartColor = '#60a5fa';
 
-  function pick(obj, keys){
-    for (const k of keys){
-      if (obj && Object.prototype.hasOwnProperty.call(obj,k) && obj[k] != null) return obj[k];
-    }
-    return undefined;
+  function $(id){ return document.getElementById(id); }
+
+  function setStatus(msg, warn){
+    $('status').innerHTML = msg;
+    var d = $('dot');
+    if (warn) { d.className = 'dot warn'; } else { d.className = 'dot'; }
+  }
+
+  function xhrJson(url, ok, fail){
+    try{
+      var x = new XMLHttpRequest();
+      x.onreadystatechange = function(){
+        if (x.readyState === 4){
+          if (x.status >= 200 && x.status < 300){
+            try { ok(JSON.parse(x.responseText)); } catch(e){ fail(e); }
+          } else {
+            fail(new Error('HTTP '+x.status));
+          }
+        }
+      };
+      x.open('GET', url, true);
+      x.setRequestHeader('Accept','application/json');
+      x.send();
+    }catch(err){ fail(err); }
   }
 
   function toDate(rec){
-    const f = rec.fields || {};
-    const d1 = pick(f, ['date_heure','dateheure','date']);
-    if (d1) return new Date(d1);
-    // Fallback: combine date + heures if provided separately
-    const d = pick(f, ['date']);
-    const h = pick(f, ['heures','hour','time']);
-    if (d && h) return new Date(`${d}T${h}:00`);
-    return rec.record_timestamp ? new Date(rec.record_timestamp) : null;
+    var f = rec.fields || {};
+    var p = f.date_heure || f.dateheure || f.date || rec.record_timestamp;
+    return p ? new Date(p) : null;
   }
 
   function toConso(rec){
-    const f = rec.fields || {};
-    return Number(pick(f, ['consommation','consommation_mw','conso']));
+    var f = rec.fields || {};
+    var v = f.consommation != null ? f.consommation : (f.consommation_mw != null ? f.consommation_mw : f.conso);
+    return Number(v);
   }
 
-  async function load(){
+  function fmtDate(d){
     try{
-      el('#status').textContent = 'Mise à jour…';
-      el('#dot').classList.remove('warn');
-
-      const r = await fetch(API, {cache:'no-store'});
-      if(!r.ok) throw new Error('HTTP '+r.status);
-      const data = await r.json();
-
-      const list = (data.records || [])
-        .map(rec => ({ t: toDate(rec), y: toConso(rec) }))
-        .filter(p => p.t && isFinite(p.y))
-        .sort((a,b)=> a.t - b.t); // oldest -> newest
-
-      if (!list.length) throw new Error('Aucun point de donnée');
-
-      const last = list[list.length-1];
-      el('#nowVal').textContent = Math.round(last.y).toLocaleString('fr-FR');
-
-      const when = last.t.toLocaleString('fr-FR', {
-        timeZone: tz, hour: '2-digit', minute:'2-digit', day:'2-digit', month:'2-digit', year:'numeric'
-      });
-      el('#nowWhen').textContent = 'Dernière mesure : ' + when + ' (pas 15 min)';
-
-      // Lag note vs wall clock
-      const lagMin = Math.round((Date.now() - last.t.getTime())/60000);
-      el('#lagNote').textContent = lagMin>30
-        ? '⚠️ Donnée âgée de ~' + lagMin + ' min (le flux éCO₂mix "temps réel" est publié ~1×/h).'
-        : 'Actualisation automatique chaque minute (flux publié ~1×/h).';
-      el('#dot').classList.toggle('warn', lagMin>30);
-      el('#status').textContent = 'OK';
-
-      draw(list);
-    }catch(err){
-      el('#status').textContent = 'Erreur : ' + (err.message||err);
-      el('#dot').classList.add('warn');
-      console.error(err);
-    }finally{
-      setTimeout(load, REFRESH_MS);
+      return d.toLocaleString('fr-FR', {timeZone: tz, hour:'2-digit', minute:'2-digit', day:'2-digit', month:'2-digit', year:'numeric'});
+    }catch(e){
+      // IE fallback without timeZone
+      return d.toLocaleString();
     }
   }
 
-  function draw(points){
-    const ctx = document.getElementById('chart').getContext('2d');
-    const labels = points.map(p => p.t.toLocaleTimeString('fr-FR', {timeZone: tz, hour:'2-digit', minute:'2-digit'}));
-    const values = points.map(p => p.y);
+  function drawSpark(values){
+    var w = 600, h = 220, pad = 8;
+    var min = Infinity, max = -Infinity, i;
+    for(i=0;i<values.length;i++){ if(values[i]<min) min=values[i]; if(values[i]>max) max=values[i]; }
+    if (!isFinite(min) || !isFinite(max) || max===min){ $('sparkLine').setAttribute('points',''); return; }
+    // Build points
+    var pts = [];
+    for(i=0;i<values.length;i++){
+      var x = Math.round((i/(values.length-1))*(w-2*pad)+pad);
+      var y = Math.round(h - pad - ((values[i]-min)/(max-min))*(h-2*pad));
+      pts.push(x+','+y);
+    }
+    var line = $('sparkLine');
+    line.setAttribute('points', pts.join(' '));
+    line.setAttribute('stroke', chartColor);
 
-    if(chart){ chart.data.labels = labels; chart.data.datasets[0].data = values; chart.update(); return; }
+    // Y grid / ticks
+    var g = $('yTicks'); while(g.firstChild) g.removeChild(g.firstChild);
+    var t, steps = 4;
+    for(i=0;i<=steps;i++){
+      var yy = Math.round(h - pad - (i/steps)*(h-2*pad));
+      t = document.createElementNS('http://www.w3.org/2000/svg','line');
+      t.setAttribute('x1','0'); t.setAttribute('x2', String(w));
+      t.setAttribute('y1', String(yy)); t.setAttribute('y2', String(yy));
+      g.appendChild(t);
+    }
+  }
 
-    chart = new Chart(ctx, {
-      type: 'line',
-      data: {
-        labels,
-        datasets: [{
-          label: 'Consommation (MW) — dernières 24h',
-          data: values,
-          fill: false,
-          tension: 0.25,
-          pointRadius: 0,
-          borderWidth: 2
-        }]
-      },
-      options: {
-        animation: false,
-        plugins: {
-          legend: { display: false },
-          tooltip: { callbacks: { label: ctx => `${Math.round(ctx.parsed.y).toLocaleString('fr-FR')} MW` } }
-        },
-        scales: {
-          x: { grid: { display: false } },
-          y: { grid: { color: 'rgba(148,163,184,.2)' }, ticks: { callback: v => v.toLocaleString('fr-FR')+' MW' } }
-        }
-      }
+  function process(data){
+    var recs = data && data.records ? data.records : [];
+    var list = [];
+    for (var i=0;i<recs.length;i++){
+      var t = toDate(recs[i]);
+      var y = toConso(recs[i]);
+      if (t && isFinite(y)) list.push({t:t, y:y});
+    }
+    list.sort(function(a,b){ return a.t - b.t; });
+    if (!list.length) throw new Error('Aucun point de donnée.');
+
+    var last = list[list.length-1];
+    $('nowVal').innerHTML = Math.round(last.y).toLocaleString('fr-FR');
+
+    $('nowWhen').innerHTML = 'Dernière mesure : ' + fmtDate(last.t) + ' (pas 15 min)';
+    var lagMin = Math.round((new Date().getTime() - last.t.getTime())/60000);
+    $('lagNote').innerHTML = lagMin>30
+      ? '⚠️ Donnée âgée de ~'+lagMin+' min (flux publié ~1×/h).'
+      : 'Actualisation automatique chaque minute (flux publié ~1×/h).';
+    setStatus('OK', lagMin>30);
+
+    // Build values array
+    var vals = [];
+    for (var j=Math.max(0, list.length-96); j<list.length; j++){ vals.push(list[j].y); }
+    drawSpark(vals);
+  }
+
+  function load(){
+    setStatus('Mise à jour…', false);
+    // Try primary, then fallback
+    xhrJson(API1, function(d){ process(d); }, function(){
+      xhrJson(API2, function(d){ process(d); }, function(err){
+        setStatus('Erreur de chargement', true);
+        var e = document.createElement('div'); e.className='meta err'; e.innerHTML = String(err && err.message ? err.message : err);
+        document.body.appendChild(e);
+      });
     });
   }
 
   load();
+  setInterval(load, REFRESH_MS);
 })();
 </script>
 </body>
